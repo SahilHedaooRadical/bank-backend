@@ -5,7 +5,7 @@ const userRoutes = require('./routes/userRoutes');
 const collectionRoutes = require('./routes/collectionRoutes');
 const returnRoutes = require('./routes/returnRoutes');
 
-
+const PORT = process.env.PORT || 3002;
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -19,6 +19,6 @@ app.get('/', (req, res) => {
   res.send("hello bank");
 });
 
-app.listen(5000, '0.0.0.0', () => {
-  console.log('Server running on port 5000');
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
