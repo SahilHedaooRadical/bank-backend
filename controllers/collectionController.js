@@ -45,9 +45,6 @@ exports.getCollectionsByUser = (req, res) => {
     if (err) return res.status(500).json({ error: err });
     res.status(200).json(results);
   });
-
-  console.log("Final Query:", query);
-  console.log("Params:", params);
 };
 
 exports.getSummaryByBank = (req, res) => {

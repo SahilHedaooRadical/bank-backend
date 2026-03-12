@@ -1,68 +1,6 @@
 const db = require('../models/db');
 const jwt = require('jsonwebtoken');
 
-// exports.addUser = (req, res) => {
-//   const { first_name, last_name, dial_code, phone, email, package_name, package_amount } = req.body;
-
-//   if (!first_name || !last_name || !dial_code || !phone || !package_name || !package_amount) {
-//     return res.status(400).json({ error: 'Missing required fields' });
-//   }
-
-//   const token = req.headers.authorization?.split(' ')[1];
-//   try {
-//     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-//     const bankId = decoded.bankId;
-
-//     // Step 1: Get bank acronym
-//     db.query('SELECT acronym FROM banks WHERE id = ?', [bankId], (err, bankResult) => {
-//       if (err || bankResult.length === 0) {
-//         return res.status(500).json({ error: 'Failed to fetch bank acronym' });
-//       }
-
-//       const acronym = bankResult[0].acronym;
-
-//       // Step 2: Count existing users for this bank
-//       db.query('SELECT COUNT(*) AS count FROM users WHERE bank_id = ?', [bankId], (err, countResult) => {
-//         if (err) {
-//           return res.status(500).json({ error: 'Failed to count existing users' });
-//         }
-
-//         const userNumber = countResult[0].count + 1;
-//         const customUserId = `${acronym}${userNumber.toString().padStart(2, '0')}`; // e.g., RG01
-
-//         // Step 3: Insert new user with custom_user_id
-//         db.query(
-//           `INSERT INTO users 
-//             (bank_id, first_name, last_name, dial_code, phone, email, package_name, package_amount, custom_user_id) 
-//            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-//           [
-//             bankId,
-//             first_name,
-//             last_name,
-//             dial_code,
-//             phone,
-//             email || null,
-//             package_name,
-//             package_amount,
-//             customUserId,
-//           ],
-//           (err, result) => {
-//             if (err) {
-//               return res.status(500).json({ error: err });
-//             }
-//             res.status(201).json({
-//               message: 'User added successfully',
-//               custom_user_id: customUserId,
-//             });
-//           }
-//         );
-//       });
-//     });
-//   } catch (err) {
-//     return res.status(403).json({ error: 'Invalid token' });
-//   }
-// };
-
 const crypto = require('crypto'); // ✅ use crypto module
 const accessToken = crypto.randomBytes(16).toString('hex');
 exports.addUser = (req, res) => {
@@ -83,8 +21,6 @@ exports.addUser = (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch bank acronym' });
       }
 
-      const acronym = bankResult[0].acronym;
-
       // Step 2: Count existing users for this bank
       db.query('SELECT COUNT(*) AS count FROM users WHERE bank_id = ?', [bankId], (err, countResult) => {
         if (err) {
@@ -92,16 +28,14 @@ exports.addUser = (req, res) => {
         }
 
         const userNumber = countResult[0].count + 1;
-        const customUserId = `${acronym}${userNumber.toString().padStart(2, '0')}`; // e.g., RG01
 
         // ✅ Generate access token using crypto
         const accessToken = crypto.randomUUID(); // generates a secure UUID v4
 
-        // Step 3: Insert new user with custom_user_id and access_token
         db.query(
           `INSERT INTO users 
-            (bank_id, first_name, last_name, dial_code, phone, email, package_name, package_amount, custom_user_id, access_token) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (bank_id, first_name, last_name, dial_code, phone, email, package_name, package_amount, access_token) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             bankId,
             first_name,
@@ -111,7 +45,6 @@ exports.addUser = (req, res) => {
             email || null,
             package_name,
             package_amount,
-            customUserId,
             accessToken,
           ],
           (err, result) => {
@@ -120,7 +53,6 @@ exports.addUser = (req, res) => {
             }
             res.status(201).json({
               message: 'User added successfully',
-              custom_user_id: customUserId,
               access_token: accessToken, // ✅ returned in response
             });
           }
@@ -214,24 +146,20 @@ exports.updateUser = (req, res) => {
 
 exports.updateDialCode = (req, res) => {
   const { dial_code } = req.body;
-  console.log('Received updateDialCode request:', { dial_code });
 
   const token = req.headers.authorization?.split(' ')[1];
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const bankId = decoded.bankId;
-    console.log('Decoded token:', { bankId });
 
     db.query(
       `UPDATE users SET dial_code = ? WHERE bank_id = ?`,
       [dial_code, bankId],
       (err, result) => {
-        console.log("result", result);
         if (err) {
           console.error('Database error:', err);
           return res.status(500).json({ error: 'Database error occurred', details: err.message });
         }
-        console.log('Database update result:', { affectedRows: result.affectedRows });
         if (result.affectedRows === 0) {
           return res.status(404).json({ error: 'No users found for this bank ID' });
         }
@@ -242,7 +170,6 @@ exports.updateDialCode = (req, res) => {
       }
     );
   } catch (err) {
-    console.error('Token error:', err);
     return res.status(403).json({ error: 'Invalid token', details: err.message });
   }
 };

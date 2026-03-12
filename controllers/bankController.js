@@ -64,7 +64,7 @@ exports.loginBank = (req, res) => {
 
     if (!match) return res.status(400).json({ message: 'Invalid password' });
 
-    const token = jwt.sign({ bankId: bank.id }, process.env.JWT_SECRET, { expiresIn: '1d' }); // Set token expiration to 1 days' });
+    const token = jwt.sign({ bankId: bank.id }, process.env.JWT_SECRET, { expiresIn: '1y' });
     return res.status(200).json({ message: 'Login successful', token: token, id: bank.id });
   });
 };
@@ -123,49 +123,26 @@ exports.changePassword = (req, res) => {
 
 exports.updateBankAcronym = (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
-  const { newAcronym } = req.body;
+  const { newAcronym, country, currency } = req.body;
 
-  if (!newAcronym || typeof newAcronym !== 'string' || newAcronym.length < 1 || newAcronym.length > 4) {
+  if (!newAcronym || typeof newAcronym !== 'string' || newAcronym.length < 1 || newAcronym.length > 10) {
     return res.status(400).json({ message: 'Invalid acronym' });
   }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const bankId = decoded.bankId;
+    const upperAcronym = newAcronym.toUpperCase();
 
-    // Step 1: Update acronym in banks table
-    db.query('UPDATE banks SET acronym = ? WHERE id = ?', [newAcronym.toUpperCase(), bankId], (err) => {
-      if (err) return res.status(500).json({ error: 'Failed to update bank acronym' });
-
-      // Step 2: Fetch all users with old custom_user_id
-      db.query(
-        'SELECT id, custom_user_id FROM users WHERE bank_id = ? ORDER BY id ASC',
-        [bankId],
-        (err, users) => {
-          if (err) return res.status(500).json({ error: 'Failed to fetch users for update' });
-
-          const updatePromises = users.map((user, index) => {
-            const number = (index + 1).toString().padStart(2, '0');
-            const updatedId = `${newAcronym.toUpperCase()}${number}`;
-            return new Promise((resolve, reject) => {
-              db.query(
-                'UPDATE users SET custom_user_id = ? WHERE id = ?',
-                [updatedId, user.id],
-                (err) => {
-                  if (err) reject(err);
-                  else resolve();
-                }
-              );
-            });
-          });
-
-          Promise.all(updatePromises)
-            .then(() => res.status(200).json({ message: 'Acronym and user IDs updated successfully' }))
-            .catch(err => res.status(500).json({ error: 'Error updating user IDs', details: err }));
-        }
-      );
-    });
-  } catch (err) {
+    db.query(
+      'UPDATE banks SET acronym = ?, currency = ?, country = ? WHERE id = ?',
+      [upperAcronym, currency, country, bankId],
+      (err) => {
+        if (err) return res.status(500).json({ error: 'Failed to update bank details' });
+        return res.status(200).json({ message: 'Bank details updated successfully' });
+      }
+    );
+  } catch (error) {
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
