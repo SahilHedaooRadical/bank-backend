@@ -2,10 +2,12 @@ const db = require('../models/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const dotenv = require("dotenv");
+const { OAuth2Client } = require('google-auth-library');
 
 dotenv.config();
 
-// Helper: Generate acronym from bank name
+const googleClient = new OAuth2Client(process.env.GOOGLE_WEB_CLIENT_ID);
+
 function generateAcronym(name) {
   return name
     .split(' ')
@@ -69,6 +71,73 @@ exports.loginBank = (req, res) => {
   });
 };
 
+exports.GoogleLogin = async (req, res) => {
+  const { idToken } = req.body;
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_WEB_CLIENT_ID
+    });
+
+    const payload = ticket.getPayload();
+    const { email, name } = payload;
+
+    db.query('SELECT * FROM banks WHERE email = ?', [email], (err, results) => {
+      if (err) return res.status(500).json({ message: 'Database error' });
+
+      if (results.length > 0) {
+        const user = results[0];
+        const token = jwt.sign({ bankId: user.id }, process.env.JWT_SECRET, { expiresIn: '1y' });
+        return res.status(200).json({
+          success: true,
+          isNewUser: false,
+          token,
+          id: user.id
+        });
+      } else {
+        return res.status(200).json({
+          success: true,
+          isNewUser: true,
+          userData: { name, email }
+        });
+      }
+    });
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid Google token' });
+  }
+};
+
+exports.RegisterGoogleBank = async (req, res) => {
+  const { name, email, bankName } = req.body;
+
+  const tempPassword = Math.random().toString(36).slice(-10);
+  const hashedPassword = await bcrypt.hash(tempPassword, 10);
+  const acronym = generateAcronym(bankName);
+
+  try {
+    db.query(
+      'INSERT INTO banks (name, email, password, acronym) VALUES (?, ?, ?, ?)',
+      [bankName, email, hashedPassword, acronym],
+      (err, result) => {
+        if (err) return res.status(500).json({ error: 'Failed to create account' });
+
+        const newId = result.insertId;
+        const token = jwt.sign({ bankId: newId }, process.env.JWT_SECRET, { expiresIn: '1y' });
+
+        return res.status(201).json({
+          success: true,
+          message: 'Bank registered via Google',
+          token,
+          id: newId
+        });
+      }
+    );
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid Google token' });
+  };
+};
+
 exports.getProfile = (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Token missing' });
@@ -94,28 +163,35 @@ exports.changePassword = (req, res) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const bankId = decoded.bankId;
-    const { oldPassword, newPassword } = req.body;
+    const { newPassword } = req.body;
 
-    if (!oldPassword || !newPassword) {
-      return res.status(400).json({ message: 'Old and new passwords are required' });
+    if (!newPassword) {
+      return res.status(400).json({ message: 'New password is required' });
     }
 
-    db.query('SELECT password FROM banks WHERE id = ?', [bankId], async (err, results) => {
-      if (err || results.length === 0) {
-        return res.status(404).json({ message: 'Bank not found' });
-      }
+    async function updatePass() {
+      try {
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        
+        db.query(
+          'UPDATE banks SET password = ? WHERE id = ?', 
+          [hashedPassword, bankId], 
+          (err, result) => {
+            if (err) return res.status(500).json({ message: 'Error updating password' });
+            
+            if (result.affectedRows === 0) {
+              return res.status(404).json({ message: 'Bank not found' });
+            }
 
-      const isMatch = await bcrypt.compare(oldPassword, results[0].password);
-      if (!isMatch) {
-        return res.status(400).json({ message: 'Old password is incorrect' });
+            res.json({ message: 'Password updated successfully' });
+          }
+        );
+      } catch (hashErr) {
+        res.status(500).json({ message: 'Hashing error' });
       }
+    }
 
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
-      db.query('UPDATE banks SET password = ? WHERE id = ?', [hashedPassword, bankId], (err) => {
-        if (err) return res.status(500).json({ message: 'Error updating password' });
-        res.json({ message: 'Password changed successfully' });
-      });
-    });
+    updatePass();
   } catch (err) {
     return res.status(403).json({ message: 'Invalid token' });
   }
