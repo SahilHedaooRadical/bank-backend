@@ -15,13 +15,11 @@ exports.addUser = (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const bankId = decoded.bankId;
 
-    // Step 1: Get bank acronym
     db.query('SELECT acronym FROM banks WHERE id = ?', [bankId], (err, bankResult) => {
       if (err || bankResult.length === 0) {
         return res.status(500).json({ error: 'Failed to fetch bank acronym' });
       }
 
-      // Step 2: Count existing users for this bank
       db.query('SELECT COUNT(*) AS count FROM users WHERE bank_id = ?', [bankId], (err, countResult) => {
         if (err) {
           return res.status(500).json({ error: 'Failed to count existing users' });
@@ -29,8 +27,7 @@ exports.addUser = (req, res) => {
 
         const userNumber = countResult[0].count + 1;
 
-        // ✅ Generate access token using crypto
-        const accessToken = crypto.randomUUID(); // generates a secure UUID v4
+        const accessToken = crypto.randomUUID();
 
         db.query(
           `INSERT INTO users 
@@ -53,7 +50,7 @@ exports.addUser = (req, res) => {
             }
             res.status(201).json({
               message: 'User added successfully',
-              access_token: accessToken, // ✅ returned in response
+              access_token: accessToken,
             });
           }
         );
@@ -63,8 +60,6 @@ exports.addUser = (req, res) => {
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
-
-
 
 exports.getUsers = (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -93,7 +88,6 @@ exports.deleteUser = (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const bankId = decoded.bankId;
 
-    // Step 1: Soft delete the user
     db.query(
       'UPDATE users SET is_deleted = TRUE WHERE id = ? AND bank_id = ?',
       [userId, bankId],
@@ -103,7 +97,6 @@ exports.deleteUser = (req, res) => {
           return res.status(403).json({ error: 'User not found or not owned by bank' });
         }
 
-        // Step 2: Soft delete all collections for the user
         db.query(
           'UPDATE collections SET is_deleted = TRUE WHERE user_id = ?',
           [userId],
@@ -174,9 +167,6 @@ exports.updateDialCode = (req, res) => {
   }
 };
 
-
-// ✅ backend/controllers/userController.js (add at bottom)
-// Restore a soft-deleted user and their collections
 exports.restoreUser = (req, res) => {
   const userId = req.params.id;
   const token = req.headers.authorization?.split(' ')[1];
@@ -185,7 +175,6 @@ exports.restoreUser = (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const bankId = decoded.bankId;
 
-    // Step 1: Restore user
     db.query(
       'UPDATE users SET is_deleted = FALSE WHERE id = ? AND bank_id = ?',
       [userId, bankId],
@@ -195,7 +184,6 @@ exports.restoreUser = (req, res) => {
           return res.status(400).json({ error: 'User not found or unauthorized' });
         }
 
-        // Step 2: Restore collections
         db.query(
           'UPDATE collections SET is_deleted = FALSE WHERE user_id = ?',
           [userId],
@@ -210,8 +198,6 @@ exports.restoreUser = (req, res) => {
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
-
-
 
 exports.getDeletedUsers = (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -233,7 +219,6 @@ exports.getDeletedUsers = (req, res) => {
   }
 };
 
-// ✅ Fetch access_token of a user (used for public collection sharing)
 exports.getAccessTokenByUserId = (req, res) => {
   const { user_id } = req.query;
   const token = req.headers.authorization?.split(' ')[1];

@@ -81,7 +81,7 @@ exports.GoogleLogin = async (req, res) => {
     });
 
     const payload = ticket.getPayload();
-    const { email, name } = payload;
+    const { email, name, picture } = payload; 
 
     db.query('SELECT * FROM banks WHERE email = ?', [email], (err, results) => {
       if (err) return res.status(500).json({ message: 'Database error' });
@@ -99,7 +99,7 @@ exports.GoogleLogin = async (req, res) => {
         return res.status(200).json({
           success: true,
           isNewUser: true,
-          userData: { name, email }
+          userData: { name, email, profile_url: picture }
         });
       }
     });
@@ -109,7 +109,7 @@ exports.GoogleLogin = async (req, res) => {
 };
 
 exports.RegisterGoogleBank = async (req, res) => {
-  const { name, email, bankName } = req.body;
+  const { name, email, bankName, profile_url } = req.body; 
 
   const tempPassword = Math.random().toString(36).slice(-10);
   const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -117,8 +117,8 @@ exports.RegisterGoogleBank = async (req, res) => {
 
   try {
     db.query(
-      'INSERT INTO banks (name, email, password, acronym) VALUES (?, ?, ?, ?)',
-      [bankName, email, hashedPassword, acronym],
+      'INSERT INTO banks (name, email, password, acronym, profile_url) VALUES (?, ?, ?, ?, ?)',
+      [bankName, email, hashedPassword, acronym, profile_url],
       (err, result) => {
         if (err) return res.status(500).json({ error: 'Failed to create account' });
 
@@ -134,8 +134,8 @@ exports.RegisterGoogleBank = async (req, res) => {
       }
     );
   } catch (error) {
-    return res.status(401).json({ message: 'Invalid Google token' });
-  };
+    return res.status(401).json({ message: 'Error during registration' });
+  }
 };
 
 exports.getProfile = (req, res) => {
@@ -146,7 +146,7 @@ exports.getProfile = (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const bankId = decoded.bankId;
 
-    db.query('SELECT id, name, email, acronym FROM banks WHERE id = ?', [bankId], (err, results) => {
+    db.query('SELECT * FROM banks WHERE id = ?', [bankId], (err, results) => {
       if (err) return res.status(500).json({ error: err });
       if (results.length === 0) return res.status(404).json({ error: 'Bank not found' });
       res.status(200).json(results[0]);
