@@ -81,13 +81,20 @@ exports.GoogleLogin = async (req, res) => {
     });
 
     const payload = ticket.getPayload();
-    const { email, name, picture } = payload; 
+    const { email, name, picture } = payload;
 
     db.query('SELECT * FROM banks WHERE email = ?', [email], (err, results) => {
       if (err) return res.status(500).json({ message: 'Database error' });
 
       if (results.length > 0) {
         const user = results[0];
+
+        if (!user.profile_url && picture) {
+          db.query('UPDATE banks SET profile_url = ? WHERE id = ?', [picture, user.id], (updateErr) => {
+            if (updateErr) console.error("Failed to auto-update profile picture:", updateErr);
+          });
+        }
+
         const token = jwt.sign({ bankId: user.id }, process.env.JWT_SECRET, { expiresIn: '1y' });
         return res.status(200).json({
           success: true,
@@ -109,7 +116,7 @@ exports.GoogleLogin = async (req, res) => {
 };
 
 exports.RegisterGoogleBank = async (req, res) => {
-  const { name, email, bankName, profile_url } = req.body; 
+  const { name, email, bankName, profile_url } = req.body;
 
   const tempPassword = Math.random().toString(36).slice(-10);
   const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -172,13 +179,13 @@ exports.changePassword = (req, res) => {
     async function updatePass() {
       try {
         const hashedPassword = await bcrypt.hash(newPassword, 10);
-        
+
         db.query(
-          'UPDATE banks SET password = ? WHERE id = ?', 
-          [hashedPassword, bankId], 
+          'UPDATE banks SET password = ? WHERE id = ?',
+          [hashedPassword, bankId],
           (err, result) => {
             if (err) return res.status(500).json({ message: 'Error updating password' });
-            
+
             if (result.affectedRows === 0) {
               return res.status(404).json({ message: 'Bank not found' });
             }
@@ -219,6 +226,217 @@ exports.updateBankAcronym = (req, res) => {
       }
     );
   } catch (error) {
+    return res.status(403).json({ error: 'Invalid token' });
+  }
+};
+
+exports.updateProfile = (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Token missing' });
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const bankId = decoded.bankId;
+    const { bankName, email } = req.body;
+
+    if (!bankName || bankName.trim() === '') {
+      return res.status(400).json({ message: 'Bank name is required' });
+    }
+
+    if (!email || !email.includes('@') || !email.includes('.')) {
+      return res.status(400).json({ message: 'Valid email is required' });
+    }
+
+    db.query('SELECT * FROM banks WHERE email = ? AND id != ?', [email, bankId], (err, results) => {
+      if (err) return res.status(500).json({ error: 'Database error during email check' });
+
+      if (results.length > 0) {
+        return res.status(400).json({ message: 'Email is already in use by another account' });
+      }
+
+      const newAcronym = generateAcronym(bankName);
+
+      db.query(
+        'UPDATE banks SET name = ?, email = ?, acronym = ? WHERE id = ?',
+        [bankName, email, newAcronym, bankId],
+        (updateErr, result) => {
+          if (updateErr) return res.status(500).json({ error: 'Failed to update profile' });
+
+          if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Bank not found' });
+          }
+
+          return res.status(200).json({
+            message: 'Profile updated successfully',
+            data: {
+              name: bankName,
+              email: email,
+              acronym: newAcronym
+            }
+          });
+        }
+      );
+    });
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid token' });
+  }
+};
+
+exports.deleteUserCompletely = async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Token missing' });
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const bankId = decoded.bankId;
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    db.getConnection((err, connection) => {
+      if (err) return res.status(500).json({ error: 'Database connection failed' });
+
+      connection.beginTransaction((transErr) => {
+        if (transErr) {
+          connection.release();
+          return res.status(500).json({ error: 'Transaction start failed' });
+        }
+
+        connection.query(
+          'DELETE FROM collections WHERE user_id = ? AND bank_id = ?',
+          [userId, bankId],
+          (collErr) => {
+            if (collErr) {
+              return connection.rollback(() => {
+                connection.release();
+                res.status(500).json({ error: 'Failed to delete collections' });
+              });
+            }
+
+            connection.query(
+              'DELETE FROM users WHERE id = ? AND bank_id = ?',
+              [userId, bankId],
+              (userErr, result) => {
+                if (userErr) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    res.status(500).json({ error: 'Failed to delete user' });
+                  });
+                }
+
+                if (result.affectedRows === 0) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    res.status(404).json({ message: 'User not found or unauthorized' });
+                  });
+                }
+
+                connection.commit((commitErr) => {
+                  if (commitErr) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      res.status(500).json({ error: 'Commit failed' });
+                    });
+                  }
+
+                  connection.release();
+                  return res.status(200).json({
+                    message: 'User and all collections deleted permanently'
+                  });
+                });
+              }
+            );
+          }
+        );
+      });
+    });
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid token' });
+  }
+};
+
+// Function to verify bank password before sensitive actions like account deletion
+exports.verifyBankPassword = (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Token missing' });
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const bankId = decoded.bankId;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ message: 'Password is required' });
+    }
+
+    // Database se bank ka current password fetch karein
+    db.query('SELECT password FROM banks WHERE id = ?', [bankId], async (err, results) => {
+      if (err) return res.status(500).json({ message: 'Database error' });
+      if (results.length === 0) return res.status(404).json({ message: 'Bank account not found' });
+
+      const bank = results[0];
+
+      // Bcrypt se password compare karein
+      const isMatch = await bcrypt.compare(password, bank.password);
+
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Incorrect password' });
+      }
+
+      // Agar password sahi hai
+      return res.status(200).json({
+        success: true,
+        message: 'Password verified successfully'
+      });
+    });
+  } catch (err) {
+    return res.status(403).json({ message: 'Invalid or expired token' });
+  }
+};
+
+exports.deleteBankProfileCompletely = (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Token missing' });
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const bankId = decoded.bankId;
+
+    db.getConnection((err, connection) => {
+      if (err) return res.status(500).json({ error: 'Database connection failed' });
+
+      connection.beginTransaction((transErr) => {
+        if (transErr) {
+          connection.release();
+          return res.status(500).json({ error: 'Failed to start transaction' });
+        }
+
+        // 1. Pehle sabhi collections delete karein jo is bank se linked hain
+        connection.query('DELETE FROM collections WHERE bank_id = ?', [bankId], (collErr) => {
+          if (collErr) return connection.rollback(() => { connection.release(); res.status(500).json({ error: 'Failed to delete collections' }); });
+
+          // 2. Phir sabhi users delete karein jo is bank ke under hain
+          connection.query('DELETE FROM users WHERE bank_id = ?', [bankId], (userErr) => {
+            if (userErr) return connection.rollback(() => { connection.release(); res.status(500).json({ error: 'Failed to delete users' }); });
+
+            // 3. Last mein bank account delete karein
+            connection.query('DELETE FROM banks WHERE id = ?', [bankId], (bankErr, result) => {
+              if (bankErr) return connection.rollback(() => { connection.release(); res.status(500).json({ error: 'Failed to delete bank account' }); });
+
+              connection.commit((commitErr) => {
+                if (commitErr) return connection.rollback(() => { connection.release(); res.status(500).json({ error: 'Commit failed' }); });
+
+                connection.release();
+                return res.status(200).json({ message: 'Bank account and all associated data deleted successfully' });
+              });
+            });
+          });
+        });
+      });
+    });
+  } catch (err) {
     return res.status(403).json({ error: 'Invalid token' });
   }
 };
